@@ -69,6 +69,17 @@ class ModelsMixin:
 
         df = self.features.copy()
 
+        # Limpiar features de estrategias anteriores para evitar contaminación
+        _strategy_extra_cols = [
+            "spread", "spread_z_score", "spread_z_abs",
+            "pair_correlation", "half_life",
+            "vol_ratio_custom", "realized_vol_7", "hist_vol_50",
+        ]
+        extras_to_drop = [c for c in _strategy_extra_cols if c in df.columns]
+        if extras_to_drop:
+            df.drop(columns=extras_to_drop, inplace=True)
+            self.features.drop(columns=extras_to_drop, inplace=True)
+
         # ── 1. Crear target binario según estrategia ───────
         forward_return = df["Close"].pct_change().shift(-1)
 
@@ -107,15 +118,9 @@ class ModelsMixin:
                     f"Columnas faltantes: {missing}"
                 )
 
-            dcp = df["volatility_dcp"]
-            vol_above_avg = df["Volume"] > df["Volume"].rolling(20).mean()
-
-            # Breakout alcista: precio en extremo superior + volumen alto + sube
-            bullish_breakout = (dcp > 0.95) & vol_above_avg & (forward_return > 0)
-            # Breakout bajista: precio en extremo inferior + volumen alto + baja
-            bearish_breakout = (dcp < 0.05) & vol_above_avg & (forward_return < 0)
-
-            df["target"] = (bullish_breakout | bearish_breakout).astype(int)
+            # Target direccional: ¿el precio subirá?
+            # Los features DCP, BBW y volumen informan al modelo sobre breakouts
+            df["target"] = (forward_return > 0).astype(int)
 
         elif self.selected_strategy == "stat_arb":
             # Requiere datos del par secundario
@@ -134,14 +139,10 @@ class ModelsMixin:
             spread_std = spread.rolling(20).std()
             z_score = (spread - spread_mean) / spread_std
 
-            # Forward spread change para verificar reversión
-            spread_next = spread.shift(-1)
-            spread_reverts = (
-                ((z_score > 1.0) & (spread_next < spread))
-                | ((z_score < -1.0) & (spread_next > spread))
-            )
-
-            df["target"] = ((z_score.abs() > 1.0) & spread_reverts).astype(int)
+            # Target direccional: ¿el spread subirá? (= ETH outperforms BTC → BUY)
+            # Los features z_score, spread_z_abs, pair_correlation informan al modelo
+            # cuándo las condiciones de mean reversion favorecen comprar vs vender
+            df["target"] = (spread.shift(-1) > spread).astype(int)
 
             # Agregar features para el modelo
             df["spread"] = spread
@@ -175,14 +176,9 @@ class ModelsMixin:
 
             vol_ratio = realized_vol_7 / hist_vol_50
 
-            # Forward vol ratio para confirmar reversión
-            vol_ratio_next = vol_ratio.shift(-1)
-
-            # Vol alta (ratio > 1.2) y contrae, o vol baja (ratio < 0.8) y expande
-            vol_high_contracts = (vol_ratio > 1.2) & (vol_ratio_next < vol_ratio)
-            vol_low_expands = (vol_ratio < 0.8) & (vol_ratio_next > vol_ratio)
-
-            df["target"] = (vol_high_contracts | vol_low_expands).astype(int)
+            # Target direccional: ¿el precio subirá?
+            # Los features de vol informan al modelo sobre ciclos de volatilidad
+            df["target"] = (forward_return > 0).astype(int)
 
             # Agregar features para el modelo
             df["vol_ratio_custom"] = vol_ratio

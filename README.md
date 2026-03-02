@@ -127,3 +127,31 @@ El bot incluye parámetros de gestión de riesgo:
 ## Licencia
 
 MIT — Usa, modifica y comparte libremente.
+
+
+
+ # stat_arb con ETH (el que fallaba)
+ bot = CryptoBot("ETH")
+ bot.fetch_data(last_n=500, pair_symbol="BTC")
+ bot.create_features(mode="full")
+ bot.detect_regime()
+ bot.select_strategy("stat_arb")
+ bot.train_models()
+ bot.get_signals()   # Debe tener BUY > 0
+ bot.backtest()      # Debe tener Trades > 0
+
+ # Cambiar estrategia en el mismo bot (verifica que no hay contaminación)
+ bot.select_strategy("trend_following")
+ bot.train_models()
+ bot.get_signals()   # Debe tener BUY > 0
+ bot.backtest()      # Debe tener Trades > 0
+
+ # BTC momentum (verificar que sigue funcionando)
+ bot2 = CryptoBot("BTC")
+ bot2.fetch_data(last_n=500)
+ bot2.create_features(mode="full")
+ bot2.detect_regime()
+ bot2.select_strategy("momentum")
+ bot2.train_models()
+ bot2.get_signals()
+ bot2.backtest()     # Debe seguir con ~130 trades
