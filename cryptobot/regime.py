@@ -431,16 +431,16 @@ class RegimeMixin:
         results.sort(key=lambda x: x["sharpe"], reverse=True)
 
         # 5. Print tabla formateada
-        print("=" * 85)
+        print("=" * 89)
         print(f"📈 ESTRATEGIAS RECOMENDADAS — Régimen: {self.regime}")
-        print("=" * 85)
+        print("=" * 89)
         print(f"\n{'#':<4} {'Estrategia':<35} {'Sharpe':>8} {'Win Rate':>10} {'Return':>10} {'Señal'}")
-        print("-" * 85)
+        print("-" * 89)
 
         for i, r in enumerate(results, 1):
             print(
-                f"{i:<4} {r['name']:<35} {r['sharpe']:>8.2f} {r['win_rate']:>9.1%} "
-                f"{r['total_return']:>9.2%}  {r['recommendation']}"
+                f"{i:<4} {r['name']:<35} {r['sharpe']:>8.2f} {r['win_rate']:>10.1%} "
+                f"{r['total_return']:>10.2%}  {r['recommendation']}"
             )
 
     def select_strategy(self, strategy: str) -> "RegimeMixin":
