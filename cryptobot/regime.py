@@ -318,132 +318,55 @@ class RegimeMixin:
 
         fig.show()
 
-    def recommend_strategies(self) -> None:
+    def recommend_strategies(self) -> "RegimeMixin":
         """
         Recomienda estrategias de trading basadas en el régimen actual.
 
-        Para cada estrategia del registry:
-        1. Ejecuta un backtest rápido en datos del régimen actual
-        2. Calcula Sharpe ratio, win rate, total return
-        3. Rankea estrategias de mejor a peor
-        4. Indica cuáles son recomendadas (🟢) y cuáles no (🔴)
-
-        Mapping régimen → estrategia:
-        - Bull: Trend Following, Momentum > Mean Reversion
-        - Bear: Mean Reversion, Short Momentum > Trend Following
-        - Sideways: Mean Reversion, Range Trading > Trend Following
+        Clasifica cada estrategia del registry según compatibilidad
+        con el régimen detectado (best_regimes / worst_regimes) y
+        muestra el rationale de cada una.
 
         Raises
         ------
         RuntimeError
             Si no se ha ejecutado detect_regime() previamente.
+
+        Returns
+        -------
+        CryptoBot
+            Retorna self para permitir method chaining.
         """
         self._require_regime()
 
-        df = self.features.dropna(subset=["regime"]).copy()
+        # Clasificar estrategias por compatibilidad con el régimen actual
+        recommended = []
+        neutral = []
+        not_recommended = []
 
-        # 1. Generar señales desde OHLCV completo (self.data tiene más historia)
-        ohlcv = self.data.copy()
-        strategy_signals = {}
-
-        # Trend Following — SMA Crossover
-        sma_short = ohlcv["Close"].rolling(20).mean()
-        sma_long = ohlcv["Close"].rolling(50).mean()
-        tf_signal = pd.Series(0, index=ohlcv.index)
-        tf_signal[sma_short > sma_long] = 1
-        tf_signal[sma_short < sma_long] = -1
-        strategy_signals["trend_following"] = tf_signal.reindex(df.index).fillna(0)
-
-        # Mean Reversion — Bollinger Bands
-        bb_mid = ohlcv["Close"].rolling(20).mean()
-        bb_std = ohlcv["Close"].rolling(20).std()
-        bb_upper = bb_mid + 2 * bb_std
-        bb_lower = bb_mid - 2 * bb_std
-        mr_signal = pd.Series(0, index=ohlcv.index)
-        mr_signal[ohlcv["Close"] < bb_lower] = 1
-        mr_signal[ohlcv["Close"] > bb_upper] = -1
-        strategy_signals["mean_reversion"] = mr_signal.reindex(df.index).fillna(0)
-
-        # Momentum — RSI + Volume
-        delta = ohlcv["Close"].diff()
-        gain = delta.where(delta > 0, 0).rolling(14).mean()
-        loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
-        rs = gain / loss
-        rsi = 100 - (100 / (1 + rs))
-        volume_change = ohlcv["Volume"].pct_change()
-        mom_signal = pd.Series(0, index=ohlcv.index)
-        mom_signal[(rsi > 50) & (volume_change > 0)] = 1
-        mom_signal[(rsi < 50) & (volume_change < 0)] = -1
-        strategy_signals["momentum"] = mom_signal.reindex(df.index).fillna(0)
-
-        # 2. Filtrar a períodos del régimen actual
-        regime_name_to_id = {"Bull": 2, "Bear": 0, "Sideways": 1}
-        current_regime_id = regime_name_to_id[self.regime]
-        regime_mask = df["regime"] == current_regime_id
-        returns = df["returns"]
-
-        # 3. Calcular métricas por estrategia
-        results = []
         for key, info in STRATEGY_REGISTRY.items():
-            signals = strategy_signals[key]
-
-            # Evaluar sobre todos los datos (no solo régimen)
-            strategy_returns = (signals.shift(1) * returns).dropna()
-
-            # Descontar comisión estimada (~0.1% por trade)
-            trades = (signals.diff().abs() > 0).sum()
-            total_bars = len(signals)
-            cost_per_bar = (trades / total_bars) * 0.001 if total_bars > 0 else 0
-            strategy_returns = strategy_returns - cost_per_bar
-
-            # Sharpe Ratio (sin anualizar, para comparar con backtest)
-            if strategy_returns.std() != 0 and len(strategy_returns) > 0:
-                sharpe = strategy_returns.mean() / strategy_returns.std()
-            else:
-                sharpe = 0.0
-
-            # Win Rate
-            active_returns = strategy_returns[strategy_returns != 0]
-            if len(active_returns) > 0:
-                win_rate = (active_returns > 0).sum() / len(active_returns)
-            else:
-                win_rate = 0.0
-
-            # Total Return
-            total_return = (1 + strategy_returns).cumprod().iloc[-1] - 1 if len(strategy_returns) > 0 else 0.0
-
-            # Recomendación basada en régimen
+            entry = {"key": key, **info}
             if self.regime in info["best_regimes"]:
-                recommendation = "🟢 Recomendada"
+                entry["signal"] = "🟢 Recomendada"
+                recommended.append(entry)
             elif self.regime in info["worst_regimes"]:
-                recommendation = "🔴 No recomendada"
+                entry["signal"] = "🔴 No recomendada"
+                not_recommended.append(entry)
             else:
-                recommendation = "🟡 Neutral"
+                entry["signal"] = "🟡 Neutral"
+                neutral.append(entry)
 
-            results.append({
-                "key": key,
-                "name": info["name"],
-                "sharpe": sharpe,
-                "win_rate": win_rate,
-                "total_return": total_return,
-                "recommendation": recommendation,
-            })
+        ordered = recommended + neutral + not_recommended
 
-        # 4. Rankear por Sharpe ratio (descendente)
-        results.sort(key=lambda x: x["sharpe"], reverse=True)
-
-        # 5. Print tabla formateada
-        print("=" * 91)
+        # Print formateado
+        print("=" * 70)
         print(f"📈 ESTRATEGIAS RECOMENDADAS — Régimen: {self.regime}")
-        print("=" * 91)
-        print(f"\n{'#':<4} {'Estrategia':<35} {'Sharpe':>8} {'Win Rate':>10} {'Return':>10} {'Señal'}")
-        print("-" * 91)
+        print("=" * 70)
 
-        for i, r in enumerate(results, 1):
-            print(
-                f"{i:<4} {r['name']:<35} {r['sharpe']:>8.2f} {r['win_rate']:>10.1%} "
-                f"{r['total_return']:>10.2%}  {r['recommendation']}"
-            )
+        for entry in ordered:
+            print(f"\n  {entry['signal']}  {entry['name']}")
+            print(f"  {entry['rationale']}")
+
+        return self
 
     def select_strategy(self, strategy: str) -> "RegimeMixin":
         """
