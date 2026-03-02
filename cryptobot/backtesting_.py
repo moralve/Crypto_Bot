@@ -66,6 +66,7 @@ class BacktestMixin:
             bt_data, SignalStrategy,
             cash=cash, commission=commission,
             exclusive_orders=True,
+            finalize_trades=True
         )
         stats = bt.run()
 
@@ -96,6 +97,7 @@ class BacktestMixin:
             print(f"  Mejor trade:       {stats['Best Trade [%]']:+.2f}%")
             print(f"  Peor trade:        {stats['Worst Trade [%]']:+.2f}%")
             print(f"  Duración promedio: {stats['Avg. Trade Duration']}")
+            print(f"  Profit Factor:     {stats['Profit Factor']:.2f}")
 
         print("=" * 60)
 
