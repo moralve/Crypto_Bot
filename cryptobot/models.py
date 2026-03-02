@@ -96,6 +96,105 @@ class ModelsMixin:
                 | (forward_return < 0) & (current_return < 0)
             ).astype(int)
 
+        elif self.selected_strategy == "breakout":
+            # Target = 1 cuando: precio en extremo del canal Donchian +
+            # volumen por encima del promedio 20p + follow-through
+            required_cols = ["volatility_dcp", "volatility_bbw"]
+            missing = [c for c in required_cols if c not in df.columns]
+            if missing:
+                raise RuntimeError(
+                    f"❌ Breakout requiere mode='full' en create_features(). "
+                    f"Columnas faltantes: {missing}"
+                )
+
+            dcp = df["volatility_dcp"]
+            vol_above_avg = df["Volume"] > df["Volume"].rolling(20).mean()
+
+            # Breakout alcista: precio en extremo superior + volumen alto + sube
+            bullish_breakout = (dcp > 0.95) & vol_above_avg & (forward_return > 0)
+            # Breakout bajista: precio en extremo inferior + volumen alto + baja
+            bearish_breakout = (dcp < 0.05) & vol_above_avg & (forward_return < 0)
+
+            df["target"] = (bullish_breakout | bearish_breakout).astype(int)
+
+        elif self.selected_strategy == "stat_arb":
+            # Requiere datos del par secundario
+            self._require_pair_data()
+
+            # Alinear índices entre par primario y secundario
+            pair_close = self.pair_data["Close"].reindex(df.index, method="ffill")
+            common_mask = pair_close.notna() & (pair_close > 0) & (df["Close"] > 0)
+            pair_close = pair_close[common_mask]
+            df = df[common_mask].copy()
+            forward_return = df["Close"].pct_change().shift(-1)
+
+            # Spread como log-ratio
+            spread = np.log(df["Close"] / pair_close)
+            spread_mean = spread.rolling(20).mean()
+            spread_std = spread.rolling(20).std()
+            z_score = (spread - spread_mean) / spread_std
+
+            # Forward spread change para verificar reversión
+            spread_next = spread.shift(-1)
+            spread_reverts = (
+                ((z_score > 1.0) & (spread_next < spread))
+                | ((z_score < -1.0) & (spread_next > spread))
+            )
+
+            df["target"] = ((z_score.abs() > 1.0) & spread_reverts).astype(int)
+
+            # Agregar features para el modelo
+            df["spread"] = spread
+            df["spread_z_score"] = z_score
+            df["spread_z_abs"] = z_score.abs()
+            df["pair_correlation"] = (
+                df["Close"].rolling(20).corr(pair_close)
+            )
+            # Half-life estimación via autocorrelación del spread
+            spread_lag = spread.shift(1)
+            valid = spread.notna() & spread_lag.notna()
+            if valid.sum() > 20:
+                beta = np.polyfit(spread_lag[valid].values, spread[valid].values, 1)[0]
+                half_life = -np.log(2) / np.log(max(abs(beta), 1e-10)) if abs(beta) < 1 else np.nan
+            else:
+                half_life = np.nan
+            df["half_life"] = half_life
+
+            # Merge features de vuelta a self.features
+            stat_arb_features = ["spread", "spread_z_score", "spread_z_abs",
+                                 "pair_correlation", "half_life"]
+            for col in stat_arb_features:
+                self.features[col] = np.nan
+                self.features.loc[df.index, col] = df[col]
+
+        elif self.selected_strategy == "volatility":
+            # Volatility mean reversion: operar ciclos de expansión/contracción
+            returns = df["Close"].pct_change()
+            realized_vol_7 = returns.rolling(7).std() * np.sqrt(252)
+            hist_vol_50 = returns.rolling(50).std() * np.sqrt(252)
+
+            vol_ratio = realized_vol_7 / hist_vol_50
+
+            # Forward vol ratio para confirmar reversión
+            vol_ratio_next = vol_ratio.shift(-1)
+
+            # Vol alta (ratio > 1.2) y contrae, o vol baja (ratio < 0.8) y expande
+            vol_high_contracts = (vol_ratio > 1.2) & (vol_ratio_next < vol_ratio)
+            vol_low_expands = (vol_ratio < 0.8) & (vol_ratio_next > vol_ratio)
+
+            df["target"] = (vol_high_contracts | vol_low_expands).astype(int)
+
+            # Agregar features para el modelo
+            df["vol_ratio_custom"] = vol_ratio
+            df["realized_vol_7"] = realized_vol_7
+            df["hist_vol_50"] = hist_vol_50
+
+            # Merge features de vuelta a self.features
+            vol_features = ["vol_ratio_custom", "realized_vol_7", "hist_vol_50"]
+            for col in vol_features:
+                self.features[col] = np.nan
+                self.features.loc[df.index, col] = df[col]
+
         # Eliminar filas sin target (última fila por shift(-1))
         df.dropna(subset=["target"], inplace=True)
         df["target"] = df["target"].astype(int)

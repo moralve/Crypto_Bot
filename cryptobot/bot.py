@@ -147,6 +147,8 @@ class CryptoBot(
         self.backtest_results = None
         self._bt_object = None
         self.trades: list = []
+        self.pair_data: Optional[pd.DataFrame] = None
+        self.pair_symbol: Optional[str] = None
 
         # ── Exchange Connection ─────────────────────────
         self._exchange = None
@@ -210,6 +212,14 @@ class CryptoBot(
         if self.signals is None:
             raise RuntimeError(
                 "❌ No hay señales generadas. Ejecuta bot.get_signals() primero."
+            )
+
+    def _require_pair_data(self):
+        """Verifica que fetch_data() fue ejecutado con pair_symbol."""
+        if self.pair_data is None:
+            raise RuntimeError(
+                "❌ No hay datos del par secundario. "
+                "Ejecuta bot.fetch_data(pair_symbol='ETH') primero."
             )
 
     def _require_testnet(self):

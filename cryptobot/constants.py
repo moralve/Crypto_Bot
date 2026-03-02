@@ -26,6 +26,27 @@ STRATEGY_REGISTRY = {
         "worst_regimes": ["Sideways"],
         "rationale": "Funciona mejor en mercados alcistas (Bull) porque los movimientos fuertes de precio con volumen alto tienden a continuar",
     },
+    "breakout": {
+        "name": "Breakout Trading (Donchian + Squeeze)",
+        "description": "Detecta rupturas de rangos de consolidación usando canales Donchian y compresión de Bollinger",
+        "best_regimes": ["Bull", "Bear"],
+        "worst_regimes": ["Sideways"],
+        "rationale": "Funciona mejor en mercados con tendencia (Bull/Bear) porque las rupturas generan movimientos direccionales fuertes. En Sideways produce falsos breakouts",
+    },
+    "stat_arb": {
+        "name": "Statistical Arbitrage (Pairs Trading)",
+        "description": "Explota la reversión a la media del spread entre dos activos correlacionados",
+        "best_regimes": ["Sideways", "Bear"],
+        "worst_regimes": ["Bull"],
+        "rationale": "Funciona mejor en Sideways/Bear porque es market-neutral y se beneficia de spreads estables. En Bull las tendencias fuertes pueden romper la cointegración",
+    },
+    "volatility": {
+        "name": "Volatility Trading (Vol Mean Reversion)",
+        "description": "Opera ciclos de expansión/contracción de volatilidad",
+        "best_regimes": ["Sideways", "Bear"],
+        "worst_regimes": ["Bull"],
+        "rationale": "Funciona mejor en Sideways/Bear donde la volatilidad es alta y mean-reverts. En Bull la vol suele ser baja y estable",
+    },
 }
 
 COLOR_PALETTE = {

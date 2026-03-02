@@ -9,11 +9,59 @@ import pandas as pd
 class DataMixin:
     """Métodos de data pipeline: fetch_data() y summary()."""
 
+    def _fetch_ohlcv_paginated(self, pair: str, since_ts: int, end_ts: int) -> list:
+        """
+        Fetch paginado de OHLCV para un par dado.
+
+        Parameters
+        ----------
+        pair : str
+            Par de trading (e.g., "BTC/USDT").
+        since_ts : int
+            Timestamp de inicio en milisegundos.
+        end_ts : int
+            Timestamp de fin en milisegundos.
+
+        Returns
+        -------
+        list
+            Lista de candles [timestamp, open, high, low, close, volume].
+        """
+        all_candles = []
+        since = since_ts
+        limit = 1000
+
+        while since < end_ts:
+            batch = self._exchange.fetch_ohlcv(
+                pair, self.timeframe, since=since, limit=limit
+            )
+            if not batch:
+                break
+            batch = [c for c in batch if c[0] <= end_ts]
+            all_candles.extend(batch)
+            if len(batch) < limit:
+                break
+            since = batch[-1][0] + 1
+
+        return all_candles
+
+    @staticmethod
+    def _candles_to_dataframe(candles: list) -> pd.DataFrame:
+        """Convierte lista de candles OHLCV a DataFrame indexado por Date."""
+        df = pd.DataFrame(
+            candles, columns=["Timestamp", "Open", "High", "Low", "Close", "Volume"]
+        )
+        df["Date"] = pd.to_datetime(df["Timestamp"], unit="ms")
+        df = df.set_index("Date").drop(columns=["Timestamp"])
+        df = df[~df.index.duplicated(keep="last")].sort_index()
+        return df
+
     def fetch_data(
         self,
         last_n: int = 200,
         start: Optional[str] = None,
         end: Optional[str] = None,
+        pair_symbol: Optional[str] = None,
     ) -> "DataMixin":
         """
         Obtiene datos OHLCV del exchange via CCXT.
@@ -38,6 +86,9 @@ class DataMixin:
             Fecha de inicio en formato "YYYY-MM-DD".
         end : str, optional
             Fecha de fin en formato "YYYY-MM-DD". Default: hoy.
+        pair_symbol : str, optional
+            Símbolo del par secundario para stat_arb (e.g., "ETH").
+            Se construye como "{pair_symbol}/USDT".
 
         Returns
         -------
@@ -49,6 +100,7 @@ class DataMixin:
         >>> bot.fetch_data()
         >>> bot.fetch_data(last_n=500)
         >>> bot.fetch_data(start="2024-01-01", end="2024-06-30")
+        >>> bot.fetch_data(last_n=500, pair_symbol="ETH")
         """
         # ── Calcular timestamps ────────────────────────
         if start is not None:
@@ -69,23 +121,10 @@ class DataMixin:
                 (datetime.now() - timedelta(hours=hours)).timestamp() * 1000
             )
 
-        # ── Fetch paginado ────────────────────────────
-        all_candles = []
-        since = since_timestamp
-        limit = 1000  # Bybit v5 soporta hasta 1000 por request
-
-        while since < end_timestamp:
-            batch = self._exchange.fetch_ohlcv(
-                self._pair, self.timeframe, since=since, limit=limit
-            )
-            if not batch:
-                break
-            # Filtrar candles que excedan end_timestamp
-            batch = [c for c in batch if c[0] <= end_timestamp]
-            all_candles.extend(batch)
-            if len(batch) < limit:
-                break
-            since = batch[-1][0] + 1
+        # ── Fetch principal (paginado) ────────────────
+        all_candles = self._fetch_ohlcv_paginated(
+            self._pair, since_timestamp, end_timestamp
+        )
 
         # ── Caso sin datos ────────────────────────────
         if not all_candles:
@@ -93,12 +132,7 @@ class DataMixin:
             return self
 
         # ── Construir DataFrame ───────────────────────
-        df = pd.DataFrame(
-            all_candles, columns=["Timestamp", "Open", "High", "Low", "Close", "Volume"]
-        )
-        df["Date"] = pd.to_datetime(df["Timestamp"], unit="ms")
-        df = df.set_index("Date").drop(columns=["Timestamp"])
-        df = df[~df.index.duplicated(keep="last")].sort_index()
+        df = self._candles_to_dataframe(all_candles)
         self.data = df
 
         # ── Resumen ───────────────────────────────────
@@ -106,6 +140,25 @@ class DataMixin:
         print(f"   Período: {df.index[0]:%Y-%m-%d} → {df.index[-1]:%Y-%m-%d}")
         print(f"   Registros: {len(df)}")
         print(f"   Precio actual: ${df['Close'].iloc[-1]:,.2f}")
+
+        # ── Fetch par secundario (stat_arb) ───────────
+        if pair_symbol is not None:
+            pair_pair = f"{pair_symbol.upper()}/USDT"
+            pair_candles = self._fetch_ohlcv_paginated(
+                pair_pair, since_timestamp, end_timestamp
+            )
+
+            if not pair_candles:
+                print(f"❌ No se obtuvieron datos para par secundario {pair_pair}")
+            else:
+                pair_df = self._candles_to_dataframe(pair_candles)
+                self.pair_data = pair_df
+                self.pair_symbol = pair_symbol.upper()
+
+                print(f"📊 Par secundario: {pair_pair}")
+                print(f"   Período: {pair_df.index[0]:%Y-%m-%d} → {pair_df.index[-1]:%Y-%m-%d}")
+                print(f"   Registros: {len(pair_df)}")
+                print(f"   Precio actual: ${pair_df['Close'].iloc[-1]:,.2f}")
 
         return self
 
