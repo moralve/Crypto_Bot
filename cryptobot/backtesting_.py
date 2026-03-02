@@ -7,7 +7,8 @@ class BacktestMixin:
     """Métodos de backtesting: backtest() y backtest_plot()."""
 
     def backtest(self, cash: float = 10_000, commission: float = 0.001,
-                 position_pct: float = 100, leverage: int = 1) -> "BacktestMixin":
+                 position_pct: float = 100, leverage: int = 1,
+                 scope: str = "test") -> "BacktestMixin":
         """
         Ejecuta backtest de la estrategia usando backtesting.py.
 
@@ -23,6 +24,11 @@ class BacktestMixin:
         leverage : int, default 1
             Apalancamiento a usar. Debe ser uno de: 1, 2, 3, 5, 10, 20, 50, 100.
             Ej: 10 = 10x leverage (margin = 10%).
+        scope : str, default "test"
+            Porción de datos a usar:
+            - "test": solo out-of-sample (desde _test_start). Resultados realistas.
+            - "train": solo in-sample (antes de _test_start). Para comparar.
+            - "all": todos los datos. Warning: incluye datos de entrenamiento.
 
         Returns
         -------
@@ -60,8 +66,25 @@ class BacktestMixin:
                 f"recibido: {leverage}"
             )
 
+        import warnings as _w
         from backtesting import Backtest, Strategy
         from .constants import STRATEGY_REGISTRY
+
+        # ── Validar scope ─────────────────────────────────
+        valid_scopes = ("test", "train", "all")
+        if scope not in valid_scopes:
+            raise ValueError(
+                f"❌ scope debe ser uno de {valid_scopes}, recibido: '{scope}'"
+            )
+
+        # Fallback si no hay split temporal
+        if scope in ("test", "train") and self._test_start is None:
+            _w.warn(
+                f"⚠️ No hay split temporal (_test_start is None). "
+                f"Usando scope='all'. Ejecuta train_models(test_size>0) para habilitar.",
+                stacklevel=2,
+            )
+            scope = "all"
 
         # Convertir parámetros para backtesting.py
         size = position_pct / 100       # ej: 5 → 0.05
@@ -69,11 +92,25 @@ class BacktestMixin:
             size = 0.9999  # Asegurar interpretación como fracción del equity
         margin = 1 / leverage           # ej: 10x → 0.1
 
-        # Alinear datos OHLCV con el índice de señales
-        bt_data = self.data.loc[self.signals.index].copy()
+        # ── Filtrar señales por scope ─────────────────────
+        scoped_signals = self.signals.copy()
+        if scope == "test":
+            scoped_signals = scoped_signals[scoped_signals.index >= self._test_start]
+        elif scope == "train":
+            scoped_signals = scoped_signals[scoped_signals.index < self._test_start]
+        # scope == "all": sin filtro
+
+        if len(scoped_signals) == 0:
+            raise RuntimeError(
+                f"❌ No hay señales para scope='{scope}'. "
+                f"Verifica que haya datos en el rango seleccionado."
+            )
+
+        # Alinear datos OHLCV con el índice de señales filtradas
+        bt_data = self.data.loc[scoped_signals.index].copy()
 
         # Capturar señales para la inner class
-        signal_values = self.signals.values
+        signal_values = scoped_signals.values
 
         class SignalStrategy(Strategy):
             signal_array = signal_values
@@ -124,9 +161,19 @@ class BacktestMixin:
 
         exposure = position_pct * leverage
 
+        scope_labels = {"test": "OUT-OF-SAMPLE", "train": "IN-SAMPLE", "all": "TODOS LOS DATOS"}
+        scope_label = scope_labels[scope]
+
         print("=" * 60)
-        print(f"📈 BACKTEST — {strategy_name}")
+        print(f"📈 BACKTEST — {strategy_name} [{scope_label}]")
         print("=" * 60)
+
+        # Scope info
+        print(f"\n  Scope:             {scope_label}")
+        print(f"  Período:           {bt_data.index[0].strftime('%Y-%m-%d')} → {bt_data.index[-1].strftime('%Y-%m-%d')}")
+        print(f"  Registros:         {len(bt_data)}")
+        if scope == "all" and self._test_start is not None:
+            print(f"  ⚠️  Incluye datos de entrenamiento (data leakage)")
 
         print(f"\n  Capital inicial:   ${cash:,.2f}")
         print(f"  Posición/trade:    {position_pct:.1f}%")

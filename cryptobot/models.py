@@ -25,6 +25,7 @@ class ModelsMixin:
         self,
         window: str = "expanding",
         window_size: int = 60,
+        test_size: float = 0.2,
     ) -> "ModelsMixin":
         """
         Entrena y compara múltiples modelos ML para la estrategia seleccionada.
@@ -48,6 +49,9 @@ class ModelsMixin:
               Se adapta mejor a cambios de régimen.
         window_size : int, default 60
             Tamaño de la ventana para modo "sliding" (en períodos).
+        test_size : float, default 0.2
+            Proporción de datos reservados como test set (out-of-sample).
+            0.0 = sin split (comportamiento anterior), máximo 0.5.
 
         Returns
         -------
@@ -66,6 +70,11 @@ class ModelsMixin:
         """
         self._require_features()
         self._require_strategy()
+
+        if not (0 <= test_size <= 0.5):
+            raise ValueError(
+                f"❌ test_size debe estar entre 0 y 0.5, recibido: {test_size}"
+            )
 
         df = self.features.copy()
 
@@ -206,7 +215,34 @@ class ModelsMixin:
         X = df[feature_cols].values
         y = df["target"].values
 
-        # ── 3. Split temporal ──────────────────────────────
+        # ── 3. Split temporal train/test ─────────────────────
+        import warnings as _w
+
+        if test_size > 0:
+            split_idx = int(len(X) * (1 - test_size))
+            if split_idx < 30:
+                _w.warn(
+                    f"⚠️ Solo {split_idx} registros para train (mínimo 30). "
+                    f"Usando test_size=0 (sin split).",
+                    stacklevel=2,
+                )
+                test_size = 0
+
+        if test_size > 0:
+            X_train_full = X[:split_idx]
+            y_train_full = y[:split_idx]
+            X_test_oos = X[split_idx:]
+            y_test_oos = y[split_idx:]
+            self._test_start = df.index[split_idx]
+            self._X_test = X_test_oos
+            self._y_test = y_test_oos
+        else:
+            X_train_full = X
+            y_train_full = y
+            self._test_start = None
+            self._X_test = None
+            self._y_test = None
+
         tscv = TimeSeriesSplit(n_splits=5)
 
         # ── 4. Definir modelos ─────────────────────────────
@@ -244,19 +280,19 @@ class ModelsMixin:
             all_y_true = []
             all_y_pred = []
 
-            for train_idx, test_idx in tscv.split(X):
-                X_train, X_test = X[train_idx], X[test_idx]
-                y_train, y_test = y[train_idx], y[test_idx]
+            for train_idx, val_idx in tscv.split(X_train_full):
+                X_tr, X_val = X_train_full[train_idx], X_train_full[val_idx]
+                y_tr, y_val = y_train_full[train_idx], y_train_full[val_idx]
 
                 # Sliding window: recortar train a últimos window_size registros
-                if window == "sliding" and len(X_train) > window_size:
-                    X_train = X_train[-window_size:]
-                    y_train = y_train[-window_size:]
+                if window == "sliding" and len(X_tr) > window_size:
+                    X_tr = X_tr[-window_size:]
+                    y_tr = y_tr[-window_size:]
 
-                pipeline.fit(X_train, y_train)
-                y_pred = pipeline.predict(X_test)
+                pipeline.fit(X_tr, y_tr)
+                y_pred = pipeline.predict(X_val)
 
-                all_y_true.extend(y_test)
+                all_y_true.extend(y_val)
                 all_y_pred.extend(y_pred)
 
             all_y_true = np.array(all_y_true)
@@ -272,9 +308,9 @@ class ModelsMixin:
         # ── 6. Seleccionar mejor modelo por F1 ────────────
         best_name = max(results, key=lambda k: results[k]["f1"])
 
-        # ── 7. Refit mejor modelo en datos completos ──────
+        # ── 7. Refit mejor modelo en datos de training ────
         best_pipeline = models[best_name]
-        best_pipeline.fit(X, y)
+        best_pipeline.fit(X_train_full, y_train_full)
 
         # ── 8. Guardar estado ──────────────────────────────
         self.model = best_pipeline
@@ -282,10 +318,22 @@ class ModelsMixin:
         self.model_metrics = results[best_name]
         self.model_comparison = pd.DataFrame(results).T
         self.model_comparison.index.name = "model"
-        self._X_train = X
-        self._y_train = y
+        self._X_train = X_train_full
+        self._y_train = y_train_full
 
-        # ── 9. Print tabla comparativa ─────────────────────
+        # ── 9. Evaluación Out-of-Sample ────────────────────
+        if test_size > 0 and self._X_test is not None and len(self._X_test) > 0:
+            y_pred_oos = best_pipeline.predict(self._X_test)
+            self._oos_metrics = {
+                "accuracy": accuracy_score(self._y_test, y_pred_oos),
+                "precision": precision_score(self._y_test, y_pred_oos, zero_division=0),
+                "recall": recall_score(self._y_test, y_pred_oos, zero_division=0),
+                "f1": f1_score(self._y_test, y_pred_oos, zero_division=0),
+            }
+        else:
+            self._oos_metrics = None
+
+        # ── 10. Print tabla comparativa ────────────────────
         print("=" * 75)
         print("🤖 COMPARACIÓN DE MODELOS")
         print("=" * 75)
@@ -300,6 +348,34 @@ class ModelsMixin:
             )
 
         print(f"\n✅ Mejor modelo: {best_name} (F1: {results[best_name]['f1']:.4f})")
+
+        # ── 11. Print info del split temporal ──────────────
+        if test_size > 0 and self._test_start is not None:
+            n_train = len(X_train_full)
+            n_test = len(self._X_test)
+            print(f"\n{'─' * 75}")
+            print(f"📊 SPLIT TEMPORAL")
+            print(f"{'─' * 75}")
+            print(f"  Train: {n_train} registros (hasta {self._test_start.strftime('%Y-%m-%d')})")
+            print(f"  Test:  {n_test} registros (desde {self._test_start.strftime('%Y-%m-%d')})")
+            print(f"  Ratio: {test_size:.0%} test")
+
+            print(f"\n  {'Métrica':<15} {'CV (train)':>12} {'OOS (test)':>12} {'Ratio':>8}")
+            print(f"  {'─' * 50}")
+
+            cv_metrics = results[best_name]
+            for metric in ["accuracy", "precision", "recall", "f1"]:
+                cv_val = cv_metrics[metric]
+                oos_val = self._oos_metrics[metric]
+                ratio = oos_val / cv_val if cv_val > 0 else 0
+                print(f"  {metric:<15} {cv_val:>12.4f} {oos_val:>12.4f} {ratio:>7.0%}")
+
+            # Warning de overfitting
+            cv_f1 = cv_metrics["f1"]
+            oos_f1 = self._oos_metrics["f1"]
+            if cv_f1 > 0 and oos_f1 < 0.7 * cv_f1:
+                print(f"\n  ⚠️  ALERTA: F1 OOS ({oos_f1:.4f}) < 70% del F1 CV ({cv_f1:.4f})")
+                print(f"  ⚠️  Posible overfitting. Considerar: más datos, menos features, regularización.")
 
         return self
 
@@ -423,11 +499,23 @@ class ModelsMixin:
             "f1": f1_score(all_y_true, all_y_pred, zero_division=0),
         }
 
-        # Refit en datos completos
+        # Refit en datos de training
         self.model.fit(self._X_train, self._y_train)
         self.model_metrics = new_metrics
 
-        # ── 5. Print resultados ────────────────────────────
+        # ── 5. Re-evaluación OOS ─────────────────────────
+        old_oos = self._oos_metrics.copy() if self._oos_metrics else None
+
+        if self._X_test is not None and len(self._X_test) > 0:
+            y_pred_oos = self.model.predict(self._X_test)
+            self._oos_metrics = {
+                "accuracy": accuracy_score(self._y_test, y_pred_oos),
+                "precision": precision_score(self._y_test, y_pred_oos, zero_division=0),
+                "recall": recall_score(self._y_test, y_pred_oos, zero_division=0),
+                "f1": f1_score(self._y_test, y_pred_oos, zero_division=0),
+            }
+
+        # ── 6. Print resultados ────────────────────────────
         print("=" * 85)
         print(f"🔧 OPTIMIZACIÓN — {model_name}")
         print("=" * 85)
@@ -441,6 +529,25 @@ class ModelsMixin:
             diff = new_val - old_val
             arrow = "↑" if diff > 0 else "↓" if diff < 0 else "="
             print(f"{metric:<15} {old_val:>10.4f} {new_val:>10.4f} {arrow} {abs(diff):>8.4f}")
+
+        # Print OOS si disponible
+        if self._oos_metrics is not None:
+            print(f"\n{'─' * 50}")
+            print(f"📊 Out-of-Sample (test set)")
+            print(f"{'─' * 50}")
+
+            if old_oos is not None:
+                print(f"{'Métrica':<15} {'Antes':>10} {'Después':>10} {'Cambio':>10}")
+                print("-" * 48)
+                for metric in ["accuracy", "precision", "recall", "f1"]:
+                    ov = old_oos[metric]
+                    nv = self._oos_metrics[metric]
+                    diff = nv - ov
+                    arrow = "↑" if diff > 0 else "↓" if diff < 0 else "="
+                    print(f"{metric:<15} {ov:>10.4f} {nv:>10.4f} {arrow} {abs(diff):>8.4f}")
+            else:
+                for metric in ["accuracy", "precision", "recall", "f1"]:
+                    print(f"  {metric:<15} {self._oos_metrics[metric]:.4f}")
 
         return self
 

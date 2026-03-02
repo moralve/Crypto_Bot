@@ -150,6 +150,12 @@ class CryptoBot(
         self.pair_data: Optional[pd.DataFrame] = None
         self.pair_symbol: Optional[str] = None
 
+        # ── Temporal Split (train/test) ──────────────────
+        self._test_start = None
+        self._X_test = None
+        self._y_test = None
+        self._oos_metrics: Optional[dict] = None
+
         # ── Exchange Connection ─────────────────────────
         self._exchange = None
         self._testnet_connected = False
