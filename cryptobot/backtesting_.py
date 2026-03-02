@@ -74,8 +74,8 @@ class BacktestMixin:
 
         # --- Imprimir métricas ---
         strategy_name = STRATEGY_REGISTRY.get(
-            self.strategy, {}
-        ).get("name", self.strategy)
+            self.selected_strategy, {}
+        ).get("name", self.selected_strategy)
 
         print("=" * 60)
         print(f"📈 BACKTEST — {strategy_name}")
