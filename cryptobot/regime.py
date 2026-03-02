@@ -387,16 +387,18 @@ class RegimeMixin:
         for key, info in STRATEGY_REGISTRY.items():
             signals = strategy_signals[key]
 
-            # Filtrar solo períodos del régimen actual
-            regime_signals = signals[regime_mask]
-            regime_returns = returns[regime_mask]
+            # Evaluar sobre todos los datos (no solo régimen)
+            strategy_returns = (signals.shift(1) * returns).dropna()
 
-            strategy_returns = regime_signals.shift(1) * regime_returns
-            strategy_returns = strategy_returns.dropna()
+            # Descontar comisión estimada (~0.1% por trade)
+            trades = (signals.diff().abs() > 0).sum()
+            total_bars = len(signals)
+            cost_per_bar = (trades / total_bars) * 0.001 if total_bars > 0 else 0
+            strategy_returns = strategy_returns - cost_per_bar
 
-            # Sharpe Ratio (anualizado para crypto: 365 días)
+            # Sharpe Ratio (sin anualizar, para comparar con backtest)
             if strategy_returns.std() != 0 and len(strategy_returns) > 0:
-                sharpe = strategy_returns.mean() / strategy_returns.std() * np.sqrt(365)
+                sharpe = strategy_returns.mean() / strategy_returns.std()
             else:
                 sharpe = 0.0
 
