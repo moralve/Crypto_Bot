@@ -308,21 +308,9 @@ class VisualizationMixin:
 
         # ── 1. Escanear todos los símbolos ─────────────────
         scan_results = []
-
-        print("=" * 70)
-        print("📊 SCANNER VISUAL — Generando gráficos")
-        print("=" * 70)
-
         for symbol, temp_bot in self._scan_symbols(symbols=symbols, last_n=last_n):
-            if temp_bot is not None:
-                regime = temp_bot.regime
-                emoji = regime_emojis.get(regime, "")
-                print(f"  ✅ {symbol:<6} {regime} {emoji}")
-            else:
-                regime = "Error"
+            regime = temp_bot.regime if temp_bot is not None else "Error"
             scan_results.append((symbol, temp_bot, regime))
-
-        print("=" * 70)
 
         # ── 2. Construir grid de subplots ──────────────────
         ncols = 2
