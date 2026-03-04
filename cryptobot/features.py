@@ -200,6 +200,11 @@ class FeaturesMixin:
 
             # ffill para indicadores con NaN por diseño (e.g. PSAR up/down)
             df.ffill(inplace=True)
+
+            # Incluir FGI si está disponible
+            if getattr(self, "fear_greed_enabled", False) and "fgi_value" in self.data.columns:
+                df["fgi_value"] = self.data["fgi_value"]
+
             df.dropna(inplace=True)
             n_features = len(df.columns) - 5  # descontar OHLCV originales
 
