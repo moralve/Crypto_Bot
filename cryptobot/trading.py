@@ -66,6 +66,30 @@ class TradingMixin:
 
         return self
 
+    def disconnect_testnet(self) -> "TradingMixin":
+        """
+        Desconecta del testnet y limpia la conexión.
+
+        Returns
+        -------
+        CryptoBot
+            Retorna self para permitir method chaining.
+        """
+        if not self._testnet_connected:
+            print("⚠️  No hay conexión activa al testnet.")
+            return self
+
+        try:
+            self._exchange_testnet.close()
+        except Exception:
+            pass
+
+        self._exchange_testnet = None
+        self._testnet_connected = False
+        print(f"❌ Desconectado del testnet de {self.exchange_id.capitalize()}")
+
+        return self
+
     def execute(self, mode: str = "paper") -> dict:
         """
         Ejecuta la señal más reciente.
