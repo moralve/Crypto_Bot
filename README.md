@@ -13,6 +13,7 @@ Trading bot educativo para criptomonedas. Pipeline completo: datos → features 
   - [Parametros de CryptoBot](#parametros-de-cryptobot)
   - [Carga de Datos](#carga-de-datos)
   - [Feature Engineering](#feature-engineering)
+  - [Fear & Greed Index (Sentimiento)](#fear--greed-index-sentimiento)
   - [Deteccion de Regimen de Mercado](#deteccion-de-regimen-de-mercado)
   - [Estrategias de Trading](#estrategias-de-trading)
   - [Modelos de Machine Learning](#modelos-de-machine-learning)
@@ -134,6 +135,9 @@ bot.fetch_data(start="2024-01-01", end="2024-12-31")
 # Con par secundario (necesario para stat_arb)
 bot.fetch_data(last_n=500, pair_symbol="ETH")
 
+# Con Fear & Greed Index (sentimiento de mercado)
+bot.fetch_data(last_n=200, fear_greed=True)
+
 # Resumen y visualizacion
 bot.summary()
 bot.plot_price()
@@ -157,7 +161,7 @@ bot.plot_price()
 ### Feature Engineering
 
 ```python
-bot.create_features()              # core: ~11 indicadores
+bot.create_features()              # core: ~11 indicadores (+1 con FGI)
 bot.create_features(mode="full")   # full: 86+ indicadores (necesario para breakout)
 ```
 
@@ -191,6 +195,44 @@ bot.create_features(mode="full")   # full: 86+ indicadores (necesario para break
 | **Volumen** | 10 | ADI, CMF, EMV, Force Index, MFI, NVI, OBV, VPT, VWAP |
 | **Otros** | 3 | Cumulative Return, Daily Log Return, Daily Return |
 | **Manuales** | 2 | returns, volatility_20 |
+
+</details>
+
+---
+
+### Fear & Greed Index (Sentimiento)
+
+El Fear & Greed Index (FGI) es un indicador de sentimiento de mercado que va de 0 (miedo extremo) a 100 (codicia extrema). Se basa en datos de BTC y proviene de la API de [alternative.me](https://alternative.me/crypto/fear-and-greed-index/).
+
+| Rango | Clasificacion |
+|---|---|
+| 0–24 | Extreme Fear |
+| 25–49 | Fear |
+| 50–74 | Greed |
+| 75–100 | Extreme Greed |
+
+```python
+# Activar FGI al cargar datos
+bot.fetch_data(last_n=200, fear_greed=True)
+
+# Funciona con cualquier simbolo, pero el FGI siempre refleja sentimiento de BTC
+bot.fetch_data(last_n=200, fear_greed=True)  # ETH bot con sentimiento BTC
+```
+
+> **Nota:** El FGI siempre mide el sentimiento sobre BTC, sin importar el simbolo del bot. Para simbolos non-BTC se mostrara un warning informativo.
+
+<details>
+<summary><strong>Detalles tecnicos del FGI</strong></summary>
+
+**Como fluye por el pipeline:**
+1. `fetch_data(fear_greed=True)` descarga el historial del FGI y lo mergea con los datos OHLCV por fecha
+2. `create_features()` detecta automaticamente la columna `fear_greed` y la incluye como feature adicional
+3. Los modelos ML pueden usar el sentimiento como senal complementaria a los indicadores tecnicos
+
+**Edge cases:**
+- **API caida:** Si la API de alternative.me no responde, el bot muestra un warning y continua sin FGI
+- **Non-BTC:** El FGI se basa exclusivamente en BTC. Para otros simbolos se aplica igual pero con un warning
+- **Datos pre-2018:** El FGI existe desde febrero 2018. Para fechas anteriores los valores seran NaN y se manejan automaticamente
 
 </details>
 
@@ -397,6 +439,14 @@ Edita `cryptobot/config.py` para cambiar los defaults del bot:
 | `SCANNER_SYMBOLS` | `["BTC", "ETH", "SOL", "BNB", "XRP"]` | Simbolos del scanner |
 | `SCANNER_LAST_N` | `100` | Velas por simbolo en scanner |
 
+**Sentiment**
+
+| Variable | Default | Descripcion |
+|---|---|---|
+| `FGI_API_URL` | `"https://api.alternative.me/fng/"` | URL de la API Fear & Greed |
+| `FGI_API_TIMEOUT` | `10` | Timeout en segundos |
+| `FGI_MAX_LIMIT` | `1000` | Maximo de registros historicos |
+
 **Features**
 
 | Variable | Default | Descripcion |
@@ -475,6 +525,7 @@ CryptoBot(DataMixin, FeaturesMixin, RegimeMixin, ModelsMixin, SignalsMixin,
 | `trading.py` | TradingMixin | Paper trading en testnet |
 | `persistence.py` | PersistenceMixin | Guardar/cargar estado |
 | `scanner.py` | ScannerMixin | Escaneo multi-simbolo |
+| `sentiment.py` | — | Fear & Greed Index (utilidad) |
 | `config.py` | — | Variables configurables |
 | `constants.py` | — | Timeframes, regimenes, estrategias, colores |
 
